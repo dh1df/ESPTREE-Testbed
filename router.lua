@@ -46,22 +46,29 @@ function router.send_info()
   router.socket:send(9999,router.gw,serialize_list({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
 end
 
+function router.get_client_data_by_id(data)
+  local iplen=(router.maxip-router.minip+1-256)/data.maxclients
+  local minip=router.minip+256+(data.idx-1)*iplen
+  local maxip=minip+iplen-1
+  -- print("iplen",iplen,dec2ip(router.maxip),dec2ip(router.minip),dec2ip(minip),dec2ip(maxip))
+  return{idx=data.idx,ssid=data.ssid,minip=dec2ip(minip),maxip=dec2ip(maxip)}
+end
+
 function router.get_client_data(request)
   local level=router.depth(router.ssid)
   local maxclients=router.topology[level+1]
+  if (router.client_by_mac[request.mac]) then
+    return router.get_client_data_by_id(router.client_by_mac[request.mac])
+  end
   for i=1,maxclients do
     local ssid=router.ssid..'-'..i
     if (not router.client_by_ssid[ssid]) then
       router.client_by_ssid[ssid]=request.mac
-      router.client_by_mac[request.mac]={ssid,i}
-      local iplen=(router.maxip-router.minip+1-256)/maxclients
-      local minip=router.minip+256+(i-1)*iplen
-      local maxip=minip+iplen-1
-      -- print("iplen",iplen,dec2ip(router.maxip),dec2ip(router.minip),dec2ip(minip),dec2ip(maxip))
-      return{idx=i,ssid=ssid,minip=dec2ip(minip),maxip=dec2ip(maxip)}
+      router.client_by_mac[request.mac]={ssid=ssid,idx=i,maxclients=maxclients}
+      return router.get_client_data_by_id(router.client_by_mac[request.mac])
     end
   end
-  mprint("maxclients",maxclients,"reached")
+  mprint("maxclients",maxclients,"reached",request.mac)
   return nil
 end
 
@@ -76,10 +83,9 @@ function router.udp_on(s, data, port, ip)
       data.command='pong'
       data.topology=router.topology
       reply=serialize_list(data)
+      mprint("sending pong to ",router.ssid,ip,reply)
+      router.socket:send(port,ip,reply)
     end
-    -- mprint("send",port,ip,reply)
-    mprint("sending pong to ",ip)
-    router.socket:send(port,ip,reply)
   end
   if (request.command == 'pong' and router.state == router.JOINED) then
     -- mprint("pong", ip, port, request.topology[1])
@@ -90,6 +96,8 @@ function router.udp_on(s, data, port, ip)
     if (not router.ssid or request.ssid ~= router.ssid) then
       mprint("new ssid",request.ssid);
       router.ssid=request.ssid
+      router.client_by_ssid={}
+      router.client_by_mac={}
     end
     mprint("ip range",request.minip,"-",request.maxip)
     if (router.state == router.JOINED) then
@@ -141,25 +149,26 @@ function router.scan_results(err,arr)
   else
     local best_pref=0
     local best
-    mprint(string.format("%-26s","SSID"),"Channel BSSID              RSSI Auth Bandwidth")
+    mprint(string.format("%-26s","SSID"),"Channel BSSID              RSSI Auth Bandwidth Pref")
     for i,ap in ipairs(arr) do
-      mprint(string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth)
       pref=router.preference(ap)
+      mprint(string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth,pref)
       if (pref > best_pref) then
          best=ap
 	 best_pref=pref
       end
     end
-    mprint("-- Total APs: ", #arr)
     if (best) then
 	if (not router.ap or best.ssid ~= router.ap.ssid or best.bssid ~= router.ap.bssid or router.state == router.INIT) then
-          mprint("Connecting to best",best.bssid)
+          mprint("-- Total APs: ", #arr,"Connecting to best",best.bssid)
 	  router.ap={ssid=best.ssid,channel=best.channel,bssid=best.bssid}
 	  router.state=router.JOINING
           wifi.sta.connect(best)
 	else
-          mprint("Already connected to best",best.bssid)
+          mprint("-- Total APs: ", #arr,"Already connected to best",best.bssid)
 	end
+    else
+      mprint("-- Total APs: ", #arr,"No best match")
     end
   end
 end
@@ -171,7 +180,6 @@ end
 function router.timer_expired()
   mprint("timer expired",router.state,router.ssid,router.ap_ip,router.sta_ip)
   if (router.state == router.INIT or router.state == router.CONFIGURED) then
-    mprint("scanning")
     router.scan()
   end
   if (router.state == router.JOINED) then

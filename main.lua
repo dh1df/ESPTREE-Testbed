@@ -1,8 +1,11 @@
 posix=require'posix'
 require 'instance'
 instances={}
-for i=1,5 do
-  table.insert(instances,instance.create())
+for i=1,9 do
+  inst=instance.create()
+  inst.ap.mac=string.format("%02x:%02x:%02x:%02x:%02x:%02x",0,0,0,0,1,i)
+  inst.sta.mac=string.format("%02x:%02x:%02x:%02x:%02x:%02x",0,0,0,0,2,i)
+  table.insert(instances,inst)
 end
 instances[1]:restore()
 current.ap.ssid='ESPMESH'
@@ -18,7 +21,14 @@ instances[1]:connect(instances[2],-60)
 instances[1]:connect(instances[3],-70)
 instances[1]:connect(instances[4],-80)
 instances[4]:connect(instances[5],-65)
-instances[1]:connect(instances[5],-85)
+instances[1]:connect(instances[5],-95)
+instances[5]:connect(instances[6],-60)
+instances[6]:connect(instances[7],-60)
+instances[2]:connect(instances[7],-70)
+instances[3]:connect(instances[8],-60)
+instances[4]:connect(instances[8],-65)
+instances[5]:connect(instances[8],-70)
+instances[6]:connect(instances[9],-60)
 
 local x=5
 while (x > 0) do

@@ -13,11 +13,20 @@ function wifi.sta.config(v)
   -- print("wifi.sta.config",wifi,wifi.sta,v)
 end
 
-function wifi.sta.connect(v)
-  local ap_instance=current.sta.connection[v.bssid].ap_instance
+function wifi.sta.connect(v) 
+  if (current.sta.active_bssid) then
+    local connection=current.sta.connection[current.sta.active_bssid]
+    connection.active=nil
+    connection.ap_instance.ap.connection[current.sta.mac].active=nil
+  end
+  local connection=current.sta.connection[v.bssid]
+  current.sta.active_bssid=v.bssid
+  local ap_instance=connection.ap_instance
   local ap=ap_instance.ap
   local sta_instance=current
   local sta=sta_instance.sta
+  connection.active=1
+  ap.connection[current.sta.mac].active=1
   -- print("wifi.sta.connect",wifi,wifi.sta,wifi.sta._internal.connection[v.bssid],wifi.sta._internal.event.got_ip)
   ap_instance:ap_on("sta_connected",{mac=sta.mac,id=1})
   sta_instance:sta_on("connected",{ssid=ap.ssid,bssid=ap.mac,channel=ap.channel,auth=wifi.OPEN})
@@ -60,6 +69,10 @@ end
 
 function wifi.ap.setip(v)
   -- print("wifi.ap.setip",v,v.ip,v.netmask)
+  if (v.ip and current.ap.ip and v.ip ~= current.ap.ip) then
+    current.dhcp={}
+    current.dhcp_offset=0
+  end
   for _,k in ipairs{"ip","netmask","gateway","dns"}
   do
     -- print("wifi.ap.setip",k,v[k])
@@ -195,7 +208,7 @@ end
 
 function instance:get_connection(packet)
   for mac,connection in pairs(self.sta.connection) do
-    if (connection.ap.ip == packet.dstip) then
+    if (connection.active and connection.ap.ip == packet.dstip) then
       -- print("found",ip,"on",connection.ap_instance)
       packet.srcip=self.sta.ip
       packet.dstinstance=connection.ap_instance
@@ -204,13 +217,14 @@ function instance:get_connection(packet)
     end
   end
   for mac,connection in pairs(self.ap.connection) do
-    if (connection.sta.ip == packet.dstip) then
+    if (connection.active and connection.sta.ip == packet.dstip) then
       packet.srcip=self.ap.ip
       packet.dstinstance=connection.sta_instance
       packet.iface=self.ap
       return true
     end
   end
+  print("no destination for ",packet.dstip)
   return false
 end
 
@@ -272,8 +286,55 @@ end
 function t_zero_or_negative(t)
         return (t[1] < 0 or (t[1] == 0 and t[2] == 0))
 end
+
+function instance.get_dot()
+  local ret='digraph graphname\n{\n'
+  for i,instance in ipairs(instances) do
+    local stastr
+    if (instance.ap.ssid) then
+      stastr='"'..instance.ap.ssid..'\\n'..instance.ap.mac..'"'
+    else
+      stastr='"'..instance.ap.mac..'"'
+    end
+    local found=false
+    for i,connection in pairs(instance.sta.connection) do
+      local ap=connection.ap_instance.ap
+      if (ap.ssid) then
+        local apstr='"'..ap.ssid..'\\n'..ap.mac..'"'
+        local attrs='label=' .. connection.rssi
+        if (connection.active) then
+          attrs=attrs..",color=green"
+        end
+        ret=ret .. stastr .. " -> " .. apstr .. "[" .. attrs .. "]\n"
+        found=true
+      end
+    end
+    if (not found) then
+        ret=ret .. stastr .. "\n"
+    end
+  end
+  ret=ret .. '}\n'
+  return ret
+end
+
+last_dot=''
+dotcount=0
+
+function instance.write_dot()
+  local dot=instance.get_dot()
+  if (dot ~= last_dot) then
+    last_dot=dot
+    local filename="nodes"..dotcount..".dot"
+    local file = io.open (filename,"w")
+    file:write(dot)
+    file:close()
+    os.execute("dot -T png "..filename.." > current.png.tmp ; mv current.png.tmp current.png")
+    dotcount=dotcount+1
+  end
+end
 	
 function instance.process_all_timers(instances)
+  instance.write_dot()
   local now={posix.clock_gettime(0)}
   local min
   -- print('now',now)
