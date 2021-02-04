@@ -8,7 +8,7 @@ for i=1,9 do
   table.insert(instances,inst)
 end
 instances[1]:restore()
-current.ap.ssid='ESPMESH'
+current.ap.ssid='ESPTREE'
 current.ap.ip='10.10.0.1'
 current.ap.netmask='255.255.255.0'
 current.ap.channel=9
@@ -25,6 +25,7 @@ instances[1]:connect(instances[5],-95)
 instances[5]:connect(instances[6],-60)
 instances[6]:connect(instances[7],-60)
 instances[2]:connect(instances[7],-70)
+instances[2]:connect(instances[3],-40)
 instances[3]:connect(instances[8],-60)
 instances[4]:connect(instances[8],-65)
 instances[5]:connect(instances[8],-70)

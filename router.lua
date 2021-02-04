@@ -1,6 +1,49 @@
-router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,client_by_ssid={},client_by_mac={},errors=0}
-wifi.mode(wifi.STATIONAP)
-wifi.start()
+router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE'}
+router.speeds={
+  [router.MODE_80211B]={
+    [-98]=1,
+    [-95]=2,
+    [-89]=5.5,
+    [-86]=11
+  },
+  [router.MODE_80211G]={
+    [-93]=6,
+    [-92]=9,
+    [-91]=12,
+    [-89]=18,
+    [-85]=24,
+    [-82]=36,
+    [-78]=48,
+    [-76]=54
+  },
+  [router.MODE_80211N]={
+    [-93]=6.5,
+    [-90]=13,
+    [-87]=19.5,
+    [-84]=26,
+    [-81]=39,
+    [-76]=52,
+    [-75]=58.5,
+    [-72]=65
+  },
+  [router.MODE_80211BGN]={
+    [-98]=1,
+    [-95]=2,
+    [-93]=6.5,
+    [-91]=12,
+    [-90]=13,
+    [-89]=18,
+    [-87]=19.5,
+    [-85]=24,
+    [-84]=26,
+    [-82]=36,
+    [-81]=39,
+    [-78]=48,
+    [-76]=52,
+    [-75]=58.5,
+    [-72]=65
+  }
+}
 
 function mprint(...)
   print(wifi.ap.getmac(),...)
@@ -54,14 +97,62 @@ function router.get_client_data_by_id(data)
   return{idx=data.idx,ssid=data.ssid,minip=dec2ip(minip),maxip=dec2ip(maxip)}
 end
 
+function router.ssid_depth(ssid)
+  if (ssid:sub(0,router.prefix:len()) == router.prefix) then
+    return ssid:len()-router.prefix:len()
+  end
+  return -1
+end
+
+function router.ssid_speed(ssid)
+  local p=ssid:find('#')
+  if (p) then
+    return ssid:sub(p+1)/100
+  end
+  return 65
+end
+
+function router.ssid_client(i)
+  return router.ssid..i
+end
+
+function router.ssid_extension()
+  ext=math.floor(router.preference(router.ap)*100)
+  return '#'..ext
+end
+
+function router.speed(mode,rssi)
+  local ret=0
+  for i,v in pairs(router.speeds[mode]) do
+    if (i < rssi and ret < v) then
+      ret=v
+    end
+  end
+  return ret
+end
+
+function router.combined_speed(speed1, speed2)
+  if (speed1 == 0 or speed2 == 0) then
+    return 0
+  end
+  return 1/(1/speed1+1/speed2)
+end
+
+function router.preference(ap)
+   local speed2=router.speed(router.MODE_80211BGN,ap.rssi)
+   local speed1=router.ssid_speed(ap.ssid)
+   -- return router.combined_speed(speed1/2,speed2)
+   return router.combined_speed(speed1,speed2)
+end
+
 function router.get_client_data(request)
-  local level=router.depth(router.ssid)
+  local level=router.ssid_depth(router.ssid)
   local maxclients=router.topology[level+1]
   if (router.client_by_mac[request.mac]) then
     return router.get_client_data_by_id(router.client_by_mac[request.mac])
   end
   for i=1,maxclients do
-    local ssid=router.ssid..'-'..i
+    local ssid=router.ssid_client(i)
     if (not router.client_by_ssid[ssid]) then
       router.client_by_ssid[ssid]=request.mac
       router.client_by_mac[request.mac]={ssid=ssid,idx=i,maxclients=maxclients}
@@ -101,7 +192,9 @@ function router.udp_on(s, data, port, ip)
     end
     mprint("ip range",request.minip,"-",request.maxip)
     if (router.state == router.JOINED) then
-      wifi.ap.config{ssid=request.ssid,channel=router.ap.channel}
+      local ssid=request.ssid .. router.ssid_extension(router.ap)
+      mprint('configuring ssid',ssid)
+      wifi.ap.config{ssid=ssid,channel=router.ap.channel}
       router.minip=ip2dec(request.minip)
       router.maxip=ip2dec(request.maxip)
       local ip=dec2ip(router.minip+1)
@@ -129,19 +222,6 @@ function router.sta_on(event, info)
   end
 end
 
-function router.depth(ssid)
-   if (string.sub(ssid,0,7) == 'ESPMESH') then
-     local _,count=string.gsub(ssid,'-','')
-     return count
-   end
-   return -1
-end
-
-function router.preference(ap)
-   local depth=router.depth(ap.ssid)
-   if (depth == -1) then return 0 end
-   return 1000-depth*20+ap.rssi
-end
 
 function router.scan_results(err,arr)
   if err then
@@ -161,7 +241,8 @@ function router.scan_results(err,arr)
     if (best) then
 	if (not router.ap or best.ssid ~= router.ap.ssid or best.bssid ~= router.ap.bssid or router.state == router.INIT) then
           mprint("-- Total APs: ", #arr,"Connecting to best",best.bssid)
-	  router.ap={ssid=best.ssid,channel=best.channel,bssid=best.bssid}
+	  router.ap={}
+	  for k,v in pairs(best) do router.ap[k]=v end
 	  router.state=router.JOINING
           wifi.sta.connect(best)
 	else
@@ -193,6 +274,8 @@ function router.timer_expired()
   router.timer:alarm(5000, tmr.ALARM_SINGLE, router.timer_expired)
 end
 
+wifi.mode(wifi.STATIONAP)
+wifi.start()
 wifi.sta.on("connected",router.sta_on)
 wifi.sta.on("got_ip",router.sta_on)
 wifi.ap.on("sta_connected",router.ap_on)
