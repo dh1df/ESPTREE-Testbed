@@ -77,10 +77,13 @@ end
 --
 function ip2dec(ip) local i, dec = 3, 0; for d in string.gmatch(ip, "%d+") do dec = dec + 2 ^ (8 * i) * d; i = i - 1 end; return dec end
 
-function dec2ip(decip) local divisor, quotient, ip; for i = 3, 0, -1 do divisor = 2 ^ (i * 8); quotient, decip = math.floor(decip / divisor), math.fmod(decip, divisor); if nil == ip then ip = quotient else ip = ip .. "." .. quotient end end return ip end
+function dec2ip(decip) local divisor, quotient, ip; for i = 3, 0, -1 do divisor = 2 ^ (i * 8); quotient, decip = math.floor(decip / divisor), decip % divisor; if nil == ip then ip = quotient else ip = ip .. "." .. quotient end end return ip end
 
 
 function router.table_parse(str)
+   if (loadstring) then
+     return loadstring("return {"..str.."}")()
+   end
    return load("return {"..str.."}")()
 end
 
@@ -194,11 +197,11 @@ function router.udp_on(s, data, port, ip)
     if (router.state == router.JOINED) then
       local ssid=request.ssid .. router.ssid_extension(router.ap)
       mprint('configuring ssid',ssid)
-      wifi.ap.config{ssid=ssid,channel=router.ap.channel}
+      wifi.ap.config{ssid=ssid,channel=router.ap.channel,pwd=router.password}
       router.minip=ip2dec(request.minip)
       router.maxip=ip2dec(request.maxip)
       local ip=dec2ip(router.minip+1)
-      wifi.ap.setip{ip=ip,netmask='255.255.255.0',gw=ip}
+      wifi.ap.setip{ip=ip,netmask='255.255.255.0',gateway=ip}
       router.ap_ip=ip
       router.state=router.CONFIGURED
       router.errors=0
@@ -233,7 +236,7 @@ function router.scan_results(err,arr)
     for i,ap in ipairs(arr) do
       pref=router.preference(ap)
       mprint(string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth,pref)
-      if (pref > best_pref) then
+      if (pref > best_pref and ap.ssid:sub(1,router.prefix:len()) == router.prefix) then
          best=ap
 	 best_pref=pref
       end
@@ -242,9 +245,10 @@ function router.scan_results(err,arr)
 	if (not router.ap or best.ssid ~= router.ap.ssid or best.bssid ~= router.ap.bssid or router.state == router.INIT) then
           mprint("-- Total APs: ", #arr,"Connecting to best",best.bssid)
 	  router.ap={}
+	  best.pwd=router.password
 	  for k,v in pairs(best) do router.ap[k]=v end
 	  router.state=router.JOINING
-          wifi.sta.connect(best)
+          wifi.sta.config(best)
 	else
           mprint("-- Total APs: ", #arr,"Already connected to best",best.bssid)
 	end

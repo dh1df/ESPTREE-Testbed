@@ -9,11 +9,11 @@ end
 function wifi.start(v)
   -- print("wifi.start",wifi,v)
 end
-function wifi.sta.config(v)
-  -- print("wifi.sta.config",wifi,wifi.sta,v)
+function wifi.sta.connect(v)
+  -- print("wifi.sta.connect",wifi,wifi.sta,v)
 end
 
-function wifi.sta.connect(v) 
+function wifi.sta.config(v) 
   if (current.sta.active_bssid) then
     local connection=current.sta.connection[current.sta.active_bssid]
     connection.active=nil
