@@ -1,4 +1,4 @@
-router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE',change_counter=0}
+router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE',change_counter=0,ap_clients={}}
 router.speeds={
   [router.MODE_80211B]={
     [-98]=1,
@@ -46,11 +46,25 @@ router.speeds={
 }
 
 function mprint(v,...)
+  if (router.verbose) then
+    if (v > router.verbose) then
+      return
+    end
+  else
+    if (verbose and v > verbose) then
+    end
+  end
   print(wifi.ap.getmac(),...)
 end
 
 function router.ap_on(event, info)
   mprint(1,"router.ap_on",event)
+  if (event == 'sta_connected') then
+     router.ap_clients[info.mac]=true;
+  end
+  if (event == 'disconnected') then
+     router.ap_clients[info.mac]=nil;
+  end
 end
 
 function serialize_list (tabl)
@@ -152,7 +166,7 @@ function router.preference(ap)
    return ret,factor
 end
 
-function router.get_client_data(request)
+function router.get_client_data(request,ip)
   local level=router.ssid_depth(router.ssid)
   local maxclients=router.topology[level+1]
   if (router.client_by_mac[request.mac]) then
@@ -162,7 +176,7 @@ function router.get_client_data(request)
     local ssid=router.ssid_client(i)
     if (not router.client_by_ssid[ssid]) then
       router.client_by_ssid[ssid]=request.mac
-      router.client_by_mac[request.mac]={ssid=ssid,idx=i,maxclients=maxclients}
+      router.client_by_mac[request.mac]={ssid=ssid,idx=i,maxclients=maxclients,ip=ip}
       return router.get_client_data_by_id(router.client_by_mac[request.mac])
     end
   end
@@ -177,7 +191,7 @@ function router.udp_on(s, data, port, ip)
   if (request.command == 'ping') then
     -- mprint(1,"ping",request.mac, ip, port)
     if (router.topology) then
-      local data=router.get_client_data(request)
+      local data=router.get_client_data(request,ip)
       data.command='pong'
       data.topology=router.topology
       reply=serialize_list(data)
@@ -199,9 +213,9 @@ function router.udp_on(s, data, port, ip)
     end
     mprint(1,"ip range",request.minip,"-",request.maxip)
     if (router.state == router.JOINED) then
-      local ssid=request.ssid .. router.ssid_extension(router.ap)
-      mprint(1,'configuring ssid',ssid)
-      wifi.ap.config{ssid=ssid,channel=router.ap.channel,pwd=router.password}
+      router.full_ssid=request.ssid .. router.ssid_extension(router.ap)
+      mprint(1,'configuring ssid',router.full_ssid)
+      wifi.ap.config{ssid=router.full_ssid,channel=router.ap.channel,pwd=router.password}
       router.minip=ip2dec(request.minip)
       router.maxip=ip2dec(request.maxip)
       local ip=dec2ip(router.minip+1)
@@ -214,6 +228,7 @@ function router.udp_on(s, data, port, ip)
 end
 
 function router.sta_on(event, info)
+  mprint(1,"router.sta_on",event)
   if (event == 'got_ip' and router.ap) then
     router.state=router.JOINED
     mprint(1,"router.sta_on",event,info.ip,info.netmask,info.gw)
@@ -224,8 +239,10 @@ function router.sta_on(event, info)
     for byte in string.gmatch(info.ip, "[^.]+") do
       table.insert(bytes, tonumber(byte))
     end
-  else
-    mprint(1,"router.sta_on",event)
+  end
+  if (event == 'disconnected') then
+    router.state=router.INIT
+    router.ap=nil
   end
 end
 
@@ -306,7 +323,9 @@ wifi.sta.config{ssid='',auto=false}
 wifi.start()
 wifi.sta.on("connected",router.sta_on)
 wifi.sta.on("got_ip",router.sta_on)
+wifi.sta.on("disconnected",router.sta_on)
 wifi.ap.on("sta_connected",router.ap_on)
+wifi.ap.on("sta_disconnected",router.ap_on)
 wifi.setps(wifi.PS_NONE)
 router.state=router.INIT
 router.scan()
