@@ -1,4 +1,4 @@
-router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE'}
+router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE',change_counter=0}
 router.speeds={
   [router.MODE_80211B]={
     [-98]=1,
@@ -45,12 +45,12 @@ router.speeds={
   }
 }
 
-function mprint(...)
+function mprint(v,...)
   print(wifi.ap.getmac(),...)
 end
 
 function router.ap_on(event, info)
-  mprint("router.ap_on",event)
+  mprint(1,"router.ap_on",event)
 end
 
 function serialize_list (tabl)
@@ -88,7 +88,7 @@ function router.table_parse(str)
 end
 
 function router.send_info()
-  mprint("sending ping to ",router.gw)
+  mprint(1,"sending ping to ",router.gw)
   router.socket:send(9999,router.gw,serialize_list({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
 end
 
@@ -144,8 +144,12 @@ end
 function router.preference(ap)
    local speed2=router.speed(router.MODE_80211BGN,ap.rssi)
    local speed1=router.ssid_speed(ap.ssid)
-   -- return router.combined_speed(speed1/2,speed2)
-   return router.combined_speed(speed1,speed2)
+   local factor=1
+   if (router.ap and ap.bssid == router.ap.bssid) then
+     factor=2
+   end
+   ret=router.combined_speed(speed1,speed2)
+   return ret,factor
 end
 
 function router.get_client_data(request)
@@ -162,46 +166,46 @@ function router.get_client_data(request)
       return router.get_client_data_by_id(router.client_by_mac[request.mac])
     end
   end
-  mprint("maxclients",maxclients,"reached",request.mac)
+  mprint(1,"maxclients",maxclients,"reached",request.mac)
   return nil
 end
 
 function router.udp_on(s, data, port, ip)
-  -- mprint("router.udp_on",data,port,ip)
+  -- mprint(1,"router.udp_on",data,port,ip)
   local request=router.table_parse(data)
-  mprint("got",request.command,"from",ip)
+  mprint(1,"got",request.command,"from",ip)
   if (request.command == 'ping') then
-    -- mprint("ping",request.mac, ip, port)
+    -- mprint(1,"ping",request.mac, ip, port)
     if (router.topology) then
       local data=router.get_client_data(request)
       data.command='pong'
       data.topology=router.topology
       reply=serialize_list(data)
-      mprint("sending pong to ",router.ssid,ip,reply)
+      mprint(1,"sending pong to ",router.ssid,ip,reply)
       router.socket:send(port,ip,reply)
     end
   end
   if (request.command == 'pong' and router.state == router.JOINED) then
-    -- mprint("pong", ip, port, request.topology[1])
+    -- mprint(1,"pong", ip, port, request.topology[1])
     if (not router.topology or table.concat(router.topology,',') ~= table.concat(request.topology,',')) then
-      mprint("new topology",table.concat(request.topology,','));
+      mprint(1,"new topology",table.concat(request.topology,','));
       router.topology=request.topology
     end
     if (not router.ssid or request.ssid ~= router.ssid) then
-      mprint("new ssid",request.ssid);
+      mprint(1,"new ssid",request.ssid);
       router.ssid=request.ssid
       router.client_by_ssid={}
       router.client_by_mac={}
     end
-    mprint("ip range",request.minip,"-",request.maxip)
+    mprint(1,"ip range",request.minip,"-",request.maxip)
     if (router.state == router.JOINED) then
       local ssid=request.ssid .. router.ssid_extension(router.ap)
-      mprint('configuring ssid',ssid)
+      mprint(1,'configuring ssid',ssid)
       wifi.ap.config{ssid=ssid,channel=router.ap.channel,pwd=router.password}
       router.minip=ip2dec(request.minip)
       router.maxip=ip2dec(request.maxip)
       local ip=dec2ip(router.minip+1)
-      wifi.ap.setip{ip=ip,netmask='255.255.255.0',gateway=ip}
+      wifi.ap.setip{ip=ip,netmask='255.255.255.0',gateway=ip,dns=net.dns.getdnsserver(0)}
       router.ap_ip=ip
       router.state=router.CONFIGURED
       router.errors=0
@@ -210,9 +214,9 @@ function router.udp_on(s, data, port, ip)
 end
 
 function router.sta_on(event, info)
-  if (event == 'got_ip') then
+  if (event == 'got_ip' and router.ap) then
     router.state=router.JOINED
-    mprint("router.sta_on",event,info.ip,info.netmask,info.gw)
+    mprint(1,"router.sta_on",event,info.ip,info.netmask,info.gw)
     router.sta_ip=info.ip
     router.gw=info.gw
     router.send_info()
@@ -221,49 +225,67 @@ function router.sta_on(event, info)
       table.insert(bytes, tonumber(byte))
     end
   else
-    mprint("router.sta_on",event)
+    mprint(1,"router.sta_on",event)
   end
 end
 
+function router.check_best(best)
+  if (best == nil) then
+    return false,'No best match'
+  end
+  if (router.ap and best.ssid == router.ap.ssid and best.bssid == router.ap.bssid and router.state ~= router.INIT) then
+    router.change_counter=0
+    return false,'Already connectet to best '..best.ssid
+  end
+  router.change_counter=router.change_counter+1
+  if (router.ap and router.change_counter < 3) then
+    return false,'Best is '..best.ssid..' but switch not yet possible'
+  end
+  return true,'Connecting to best '..best.ssid
+end
 
 function router.scan_results(err,arr)
   if err then
-    mprint ("Scan failed:", err)
+    mprint (1,"Scan failed:", err)
   else
     local best_pref=0
     local best
-    mprint(string.format("%-26s","SSID"),"Channel BSSID              RSSI Auth Bandwidth Pref")
+    mprint(1,string.format("%-26s","SSID"),"Channel BSSID              RSSI Auth Bandwidth Pref")
     for i,ap in ipairs(arr) do
-      pref=router.preference(ap)
-      mprint(string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth,pref)
+      pref,fac=router.preference(ap)
+      mprint(1,string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth,pref,fac)
+      pref=pref*fac
       if (pref > best_pref and ap.ssid:sub(1,router.prefix:len()) == router.prefix) then
          best=ap
 	 best_pref=pref
       end
     end
-    if (best) then
-	if (not router.ap or best.ssid ~= router.ap.ssid or best.bssid ~= router.ap.bssid or router.state == router.INIT) then
-          mprint("-- Total APs: ", #arr,"Connecting to best",best.bssid)
-	  router.ap={}
-	  best.pwd=router.password
-	  for k,v in pairs(best) do router.ap[k]=v end
-	  router.state=router.JOINING
-          wifi.sta.config(best)
-	else
-          mprint("-- Total APs: ", #arr,"Already connected to best",best.bssid)
-	end
-    else
-      mprint("-- Total APs: ", #arr,"No best match")
+    local switch,message=router.check_best(best)
+    mprint(1,"-- Total APs: ", #arr,message)
+    if (switch) then 
+      router.ap={}
+      best.pwd=router.password
+      for k,v in pairs(best) do router.ap[k]=v end
+        router.state=router.JOINING
+      wifi.sta.config(best)
+      wifi.sta.connect()
     end
   end
 end
 
 function router.scan()
-  wifi.sta.scan({ hidden = 1 }, router.scan_results)
+  local cfg={}
+  if (router.ap) then
+     mprint(1,'Scanning on channel ',router.ap.channel)
+     cfg.channel=router.ap.channel
+  else
+     mprint(1,'Scanning on all channels')
+  end
+  wifi.sta.scan(cfg, router.scan_results)
 end
 
 function router.timer_expired()
-  mprint("timer expired",router.state,router.ssid,router.ap_ip,router.sta_ip)
+  mprint(1,"timer expired",router.state,router.ssid,router.ap_ip,router.sta_ip)
   if (router.state == router.INIT or router.state == router.CONFIGURED) then
     router.scan()
   end
@@ -278,11 +300,14 @@ function router.timer_expired()
   router.timer:alarm(5000, tmr.ALARM_SINGLE, router.timer_expired)
 end
 
+wifi.stop()
 wifi.mode(wifi.STATIONAP)
+wifi.sta.config{ssid='',auto=false}
 wifi.start()
 wifi.sta.on("connected",router.sta_on)
 wifi.sta.on("got_ip",router.sta_on)
 wifi.ap.on("sta_connected",router.ap_on)
+wifi.setps(wifi.PS_NONE)
 router.state=router.INIT
 router.scan()
 router.socket=net.createUDPSocket()
