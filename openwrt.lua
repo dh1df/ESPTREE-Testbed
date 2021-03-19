@@ -1,8 +1,10 @@
 require 'socket'
+require 'luci.jsonc'
 wifi={ap={},sta={}}
 net={}
 tmr={}
 sockets={}
+sjson={encode=luci.jsonc.stringify,decode=luci.jsonc.parse}
 
 function net.createUDPSocket()
 	ret = {
@@ -37,13 +39,22 @@ end
 function wifi.mode()
 end
 
+function wifi.setps()
+end
+
 function wifi.start()
+end
+
+function wifi.stop()
 end
 
 function wifi.sta.on()
 end
 
 function wifi.sta.scan()
+end
+
+function wifi.sta.config()
 end
 
 function wifi.ap.on()

@@ -1,19 +1,27 @@
+sjson=require 'json'
 
 wifi={STATIONAP=1,HT20=1,OPEN=1,ap={},sta={}}
-net={route={}}
+net={route={},dns={getdnsserver=function(v) return "dummy" end}}
 tmr={ALARM_SINGLE=1,ALARM_SEMI=2,ALARM_AUTO=3}
 
 function wifi.mode(v)
   -- print("wifi.mode",v,wifi)
 end
+function wifi.setps(v)
+end
 function wifi.start(v)
   -- print("wifi.start",wifi,v)
+end
+function wifi.stop()
 end
 function wifi.sta.connect(v)
   -- print("wifi.sta.connect",wifi,wifi.sta,v)
 end
 
 function wifi.sta.config(v) 
+  if (v.ssid == '') then
+    return
+  end
   if (current.sta.active_bssid) then
     local connection=current.sta.connection[current.sta.active_bssid]
     connection.active=nil

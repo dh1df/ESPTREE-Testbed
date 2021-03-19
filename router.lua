@@ -67,26 +67,6 @@ function router.ap_on(event, info)
   end
 end
 
-function serialize_list (tabl)
-    local str = ''
-    local fsep = ''
-    local sep = ','
-    for key, value in pairs (tabl) do
-	if (tonumber(key)) then
-	  str = str..fsep..'['..key..']='
-        else
-	  str = str..fsep..key..'='
-	end
-        if type (value) == "table" then
-            str = str..'{'..serialize_list (value,sep) .. '}' 
-        else
-            str = str.."'"..tostring(value).."'"
-        end
-	fsep=sep
-    end
-    return str
-end
-
 -- https://stackoverflow.com/questions/8200228/how-can-i-convert-an-ip-address-into-an-integer-with-lua/8200301
 --
 function ip2dec(ip) local i, dec = 3, 0; for d in string.gmatch(ip, "%d+") do dec = dec + 2 ^ (8 * i) * d; i = i - 1 end; return dec end
@@ -94,16 +74,9 @@ function ip2dec(ip) local i, dec = 3, 0; for d in string.gmatch(ip, "%d+") do de
 function dec2ip(decip) local divisor, quotient, ip; for i = 3, 0, -1 do divisor = 2 ^ (i * 8); quotient, decip = math.floor(decip / divisor), decip % divisor; if nil == ip then ip = quotient else ip = ip .. "." .. quotient end end return ip end
 
 
-function router.table_parse(str)
-   if (loadstring) then
-     return loadstring("return {"..str.."}")()
-   end
-   return load("return {"..str.."}")()
-end
-
 function router.send_info()
   mprint(1,"sending ping to ",router.gw)
-  router.socket:send(9999,router.gw,serialize_list({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
+  router.socket:send(9999,router.gw,sjson.encode({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
 end
 
 function router.get_client_data_by_id(data)
@@ -186,7 +159,7 @@ end
 
 function router.udp_on(s, data, port, ip)
   -- mprint(1,"router.udp_on",data,port,ip)
-  local request=router.table_parse(data)
+  local request=sjson.decode(data)
   mprint(1,"got",request.command,"from",ip)
   if (request.command == 'ping') then
     -- mprint(1,"ping",request.mac, ip, port)
@@ -194,7 +167,7 @@ function router.udp_on(s, data, port, ip)
       local data=router.get_client_data(request,ip)
       data.command='pong'
       data.topology=router.topology
-      reply=serialize_list(data)
+      reply=sjson.encode(data)
       mprint(1,"sending pong to ",router.ssid,ip,reply)
       router.socket:send(port,ip,reply)
     end
