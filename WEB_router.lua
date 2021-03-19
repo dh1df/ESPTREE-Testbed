@@ -29,10 +29,10 @@ return function (info)
        iface[v]=k:sub(4)
      end
    end
-   if (router.gw) then
-     send_buffered('0.0.0.0 0 ',router.gw,' *WIFI_STA</br>')
+   if (router.sta_info) then
+     send_buffered('0.0.0.0 0 ',router.sta_info.gw,' *WIFI_STA</br>')
+     send_buffered(router.sta_info.ip,' ',router.sta_info.netmask,' ',router.sta_info.ip,' *WIFI_STA</br>')
    end
-   send_buffered(router.sta_ip,' ? ',router.sta_ip,' *WIFI_STA</br>')
    send_buffered(router.ap_ip,' 24 ',router.ap_ip,' *WIFI_AP</br>')
    for i=0,net.route.getlen()-1 do
     local route=net.route.get(i)

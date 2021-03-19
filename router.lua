@@ -1,4 +1,4 @@
-router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,CONFIGURED_FIXED=4,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE',change_counter=0,ap_clients={}}
+router={INIT=0,JOINING=1,JOINED=2,CONFIGURED=3,ROOT=4,LEAF=5,MODE_80211B=1,MODE_80211G=2,MODE_80211N=3,MODE_80211BGN=4,state=0,client_by_ssid={},client_by_mac={},errors=0,prefix='ESPTREE',change_counter=0,ap_clients={},routed={}}
 router.speeds={
   [router.MODE_80211B]={
     [-98]=1,
@@ -52,9 +52,14 @@ function mprint(v,...)
     end
   else
     if (verbose and v > verbose) then
+      return
     end
   end
-  print(wifi.ap.getmac(),...)
+  if (wifi and wifi.ap and wifi.ap.getmac) then
+    print(wifi.ap.getmac(),...)
+  else
+    print(...)
+  end
 end
 
 function router.ap_on(event, info)
@@ -75,8 +80,8 @@ function dec2ip(decip) local divisor, quotient, ip; for i = 3, 0, -1 do divisor 
 
 
 function router.send_info()
-  mprint(1,"sending ping to ",router.gw)
-  router.socket:send(9999,router.gw,sjson.encode({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
+  mprint(1,"sending ping to ",router.sta_info.gw)
+  router.socket:send(9999,router.sta_info.gw,sjson.encode({command="ping",mac=wifi.ap.getmac(),ssid=router.ssid}))
 end
 
 function router.get_client_data_by_id(data)
@@ -157,6 +162,28 @@ function router.get_client_data(request,ip)
   return nil
 end
 
+function router.update_route(func,route)
+        local div=2
+        local mask=32
+        local rem
+	local first=route.first
+	local last=route.last
+        while (first < last) do
+                rem=first%div
+                if (rem ~= 0) then
+			net.route.add{dest=dec2ip(first),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
+                        first=first+div-rem
+                end
+                rem=last%div
+                if (rem ~= div-1) then
+			net.route.add{dest=dec2ip(first),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
+                        last=last-div+rem+1
+                end
+                div=div*2
+                mask=mask-1
+        end
+end
+
 function router.udp_on(s, data, port, ip)
   -- mprint(1,"router.udp_on",data,port,ip)
   local request=sjson.decode(data)
@@ -165,6 +192,17 @@ function router.udp_on(s, data, port, ip)
     -- mprint(1,"ping",request.mac, ip, port)
     if (router.topology) then
       local data=router.get_client_data(request,ip)
+      local oldip=router.routed[data.idx]
+      if (oldip ~= ip) then
+	 local route={first=ip2dec(data.minip),last=ip2dec(data.maxip),iface=net.IF_WIFI_AP}
+	 if (oldip) then
+           route.nexthop=oldip
+	   router.update_route(net.route.delete,route)
+         end
+	 route.nexthop=ip
+	 router.update_route(net.route.add,route)
+	 router.routed[data.idx]=ip
+      end
       data.command='pong'
       data.topology=router.topology
       reply=sjson.encode(data)
@@ -174,18 +212,25 @@ function router.udp_on(s, data, port, ip)
   end
   if (request.command == 'pong' and router.state == router.JOINED) then
     -- mprint(1,"pong", ip, port, request.topology[1])
+    local update=false
     if (not router.topology or table.concat(router.topology,',') ~= table.concat(request.topology,',')) then
       mprint(1,"new topology",table.concat(request.topology,','));
       router.topology=request.topology
+      update=true
     end
-    if (not router.ssid or request.ssid ~= router.ssid) then
+    if (request.ssid ~= router.ssid) then
       mprint(1,"new ssid",request.ssid);
       router.ssid=request.ssid
       router.client_by_ssid={}
       router.client_by_mac={}
+      update=true
+    end
+    if (request.gen ~= router.gen) then
+      router.gen=request.gen
+      update=true
     end
     mprint(1,"ip range",request.minip,"-",request.maxip)
-    if (router.state == router.JOINED) then
+    if (update) then
       router.full_ssid=request.ssid .. router.ssid_extension(router.ap)
       mprint(1,'configuring ssid',router.full_ssid)
       wifi.ap.config{ssid=router.full_ssid,channel=router.ap.channel,pwd=router.password}
@@ -203,18 +248,18 @@ end
 function router.sta_on(event, info)
   mprint(1,"router.sta_on",event)
   if (event == 'got_ip' and router.ap) then
-    router.state=router.JOINED
     mprint(1,"router.sta_on",event,info.ip,info.netmask,info.gw)
-    router.sta_ip=info.ip
-    router.gw=info.gw
-    router.send_info()
-    local bytes={}
-    for byte in string.gmatch(info.ip, "[^.]+") do
-      table.insert(bytes, tonumber(byte))
+    router.sta_info=info
+    if (router.state ~= router.LEAF) then
+      router.state=router.JOINED
+      router.send_info()
     end
   end
   if (event == 'disconnected') then
-    router.state=router.INIT
+    if (router.state ~= router.LEAF) then
+      router.state=router.INIT
+    end
+    router.sta_info=nil
     router.ap=nil
   end
 end
@@ -271,13 +316,19 @@ function router.scan()
   else
      mprint(1,'Scanning on all channels')
   end
-  wifi.sta.scan(cfg, router.scan_results)
+  pcall(wifi.sta.scan, cfg, router.scan_results)
 end
 
 function router.timer_expired()
+  local interval=5000
   mprint(1,"timer expired",router.state,router.ssid,router.ap_ip,router.sta_ip)
-  if (router.state == router.INIT or router.state == router.CONFIGURED) then
+  if (router.state == router.INIT) then
     router.scan()
+  end
+  if (router.state == router.CONFIGURED) then
+    router.send_info()
+    router.scan()
+    interval=60000
   end
   if (router.state == router.JOINED) then
     router.errors=router.errors+1
@@ -287,27 +338,35 @@ function router.timer_expired()
       router.send_info()
     end
   end
-  router.timer:alarm(5000, tmr.ALARM_SINGLE, router.timer_expired)
+  router.timer:alarm(interval, tmr.ALARM_SINGLE, router.timer_expired)
 end
 
-wifi.stop()
-wifi.mode(wifi.STATIONAP)
-wifi.sta.config{ssid='',auto=false}
-wifi.start()
-wifi.sta.on("connected",router.sta_on)
-wifi.sta.on("got_ip",router.sta_on)
-wifi.sta.on("disconnected",router.sta_on)
-wifi.ap.on("sta_connected",router.ap_on)
-wifi.ap.on("sta_disconnected",router.ap_on)
-wifi.setps(wifi.PS_NONE)
-router.state=router.INIT
-router.scan()
-router.socket=net.createUDPSocket()
-router.socket:listen(9999)
-router.socket:on("receive", router.udp_on)
-router.timer = tmr.create()
-router.timer:alarm(5000, tmr.ALARM_SINGLE, router.timer_expired)
-
---socket:on("receive", function(s, data, port, ip)
---    mprint(string.format("received '%s' from %s:%d", data, ip, port))
---end)
+function router.start()
+  if (router.state == router.INIT) then
+    wifi.stop()
+    wifi.mode(wifi.STATIONAP)
+    wifi.ap.on("sta_connected",router.ap_on)
+    wifi.ap.on("sta_disconnected",router.ap_on)
+    wifi.setps(wifi.PS_NONE)
+  end
+  if (router.state == router.LEAF) then
+    wifi.stop()
+    wifi.mode(wifi.STATION)
+  end
+  if (router.state == router.INIT or router.state == router.LEAF) then
+    wifi.sta.config{ssid='',auto=false}
+    wifi.sta.on("connected",router.sta_on)
+    wifi.sta.on("got_ip",router.sta_on)
+    wifi.sta.on("disconnected",router.sta_on)
+    wifi.start()
+    router.scan()
+  end
+  if (router.state ~= router.LEAF) then
+    router.socket=net.createUDPSocket()
+    router.socket:listen(9999)
+    router.socket:on("receive", router.udp_on)
+  end
+  router.timer = tmr.create()
+  router.timer:alarm(5000, tmr.ALARM_SINGLE, router.timer_expired)
+  router.start = nil
+end
