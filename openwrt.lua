@@ -1,10 +1,18 @@
 require 'socket'
 require 'luci.jsonc'
-wifi={ap={},sta={}}
-net={}
+require 'os'
+-- wifi={ap={}}
+net={IF_WIFI_AP=1,route={}}
 tmr={}
 sockets={}
 sjson={encode=luci.jsonc.stringify,decode=luci.jsonc.parse}
+
+function net.route.add(route)
+    local cmd='-net '..route.dest..'/'..route.mask..' gw '..route.nexthop
+    local add='route add '..cmd
+    print(add)
+    os.execute(add)
+end
 
 function net.createUDPSocket()
 	ret = {
@@ -36,41 +44,17 @@ function tmr.create()
 	}
 end
 
-function wifi.mode()
-end
-
-function wifi.setps()
-end
-
-function wifi.start()
-end
-
-function wifi.stop()
-end
-
-function wifi.sta.on()
-end
-
-function wifi.sta.scan()
-end
-
-function wifi.sta.config()
-end
-
-function wifi.ap.on()
-end
-
-function wifi.ap.getmac()
-  return 'none'
-end
+-- function wifi.ap.getmac()
+--    return 'none'
+-- end
 
 dofile 'router.lua'
 router.topology={6,3,2,1,1,1,1,1}
-router.state=router.CONFIGURED_FIXED
+router.state=router.ROOT
 router.ssid='ESPTREE'
 router.minip=0x0a0a0000
 router.maxip=0x0a0af0ff
-
+router.start()
 while true do
   fds={}
   fdsocket={}
