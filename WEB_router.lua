@@ -8,9 +8,6 @@ return function (info)
       return
    end
    send_buffered('Status ',router.state,'<br/>')
-   send_buffered('sta IP ',router.sta_ip,'<br/>')
-   send_buffered('ap IP ',router.ap_ip,'<br/>')
-   send_buffered('gw ',router.gw,'<br/>')
    send_buffered('SSID ',router.full_ssid,'<br/>')
    if (router.ap) then
       for k,v in pairs(router.ap) do
@@ -26,4 +23,21 @@ return function (info)
         send_buffered(' ',k2,' ',v2,'<br/>')
       end
    end
+   local iface={}
+   for k,v in pairs(net) do
+     if (k:sub(1,3) == 'IF_') then
+       iface[v]=k:sub(4)
+     end
+   end
+   if (router.gw) then
+     send_buffered('0.0.0.0 0 ',router.gw,' *WIFI_STA</br>')
+   end
+   send_buffered(router.sta_ip,' ? ',router.sta_ip,' *WIFI_STA</br>')
+   send_buffered(router.ap_ip,' 24 ',router.ap_ip,' *WIFI_AP</br>')
+   for i=0,net.route.getlen()-1 do
+    local route=net.route.get(i)
+    if (route and route.dest) then
+      send_buffered(route.dest,' ',route.prefixlen,' ',route.nexthop,' ',iface[route.iface],'</br>')
+    end
+  end
 end
