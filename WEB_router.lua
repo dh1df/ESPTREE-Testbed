@@ -8,6 +8,7 @@ return function (info)
       return
    end
    send_buffered('Status ',router.state,'<br/>')
+   send_buffered('Errors ',router.errors,'<br/>')
    send_buffered('SSID ',router.full_ssid,'<br/>')
    if (router.ap) then
       for k,v in pairs(router.ap) do
@@ -20,7 +21,11 @@ return function (info)
    for k,v in pairs(router.client_by_mac) do
       send_buffered('tree sta ',k,':<br/>')
       for k2,v2 in pairs(v) do
-        send_buffered(' ',k2,' ',v2,'<br/>')
+	if (k2 == 'ip') then
+          send_buffered(' ip <a href="http://',v2,'/router">',v2,'</a><br/>')
+        else
+          send_buffered(' ',k2,' ',v2,'<br/>')
+	end
       end
    end
    local iface={}

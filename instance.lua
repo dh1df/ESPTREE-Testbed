@@ -159,6 +159,7 @@ function instance.create()
    linstance.sta.mac=string.format("%02x:%02x:%02x:%02x:%02x:%02x",math.random(0,255),math.random(0,255),math.random(0,255),math.random(0,255),math.random(0,255),math.random(0,255))
    current=linstance
    dofile "router.lua"
+   router.start()
    linstance:save()
    return linstance
 end

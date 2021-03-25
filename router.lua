@@ -65,7 +65,9 @@ end
 function router.ap_on(event, info)
   mprint(1,"router.ap_on",event)
   if (event == 'sta_connected') then
-     router.ap_clients[info.mac]=true;
+     if (time) then
+         router.ap_clients[info.mac],_=time.get();
+     end
   end
   if (event == 'disconnected') then
      router.ap_clients[info.mac]=nil;
@@ -88,6 +90,9 @@ function router.get_client_data_by_id(data)
   local iplen=(router.maxip-router.minip+1-256)/data.maxclients
   local minip=router.minip+256+(data.idx-1)*iplen
   local maxip=minip+iplen-1
+  if (time) then
+      data.last,_=time.get()
+  end
   -- print("iplen",iplen,dec2ip(router.maxip),dec2ip(router.minip),dec2ip(minip),dec2ip(maxip))
   return{idx=data.idx,ssid=data.ssid,minip=dec2ip(minip),maxip=dec2ip(maxip)}
 end
@@ -171,12 +176,12 @@ function router.update_route(func,route)
         while (first < last) do
                 rem=first%div
                 if (rem ~= 0) then
-			net.route.add{dest=dec2ip(first),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
+			func{dest=dec2ip(first),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
                         first=first+div-rem
                 end
                 rem=last%div
                 if (rem ~= div-1) then
-			net.route.add{dest=dec2ip(first),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
+			func{dest=dec2ip(last-rem),prefixlen=mask,nexthop=route.nexthop,iface=route.iface}
                         last=last-div+rem+1
                 end
                 div=div*2
@@ -210,8 +215,9 @@ function router.udp_on(s, data, port, ip)
       router.socket:send(port,ip,reply)
     end
   end
-  if (request.command == 'pong' and router.state == router.JOINED) then
+  if (request.command == 'pong' and (router.state == router.JOINED or router.state == router.CONFIGURED)) then
     -- mprint(1,"pong", ip, port, request.topology[1])
+    router.errors=0
     local update=false
     if (not router.topology or table.concat(router.topology,',') ~= table.concat(request.topology,',')) then
       mprint(1,"new topology",table.concat(request.topology,','));
@@ -226,6 +232,7 @@ function router.udp_on(s, data, port, ip)
       update=true
     end
     if (request.gen ~= router.gen) then
+      mprint(1,"new gen",router.gen);
       router.gen=request.gen
       update=true
     end
@@ -240,7 +247,6 @@ function router.udp_on(s, data, port, ip)
       wifi.ap.setip{ip=ip,netmask='255.255.255.0',gateway=ip,dns=net.dns.getdnsserver(0)}
       router.ap_ip=ip
       router.state=router.CONFIGURED
-      router.errors=0
     end
   end
 end
@@ -250,6 +256,7 @@ function router.sta_on(event, info)
   if (event == 'got_ip' and router.ap) then
     mprint(1,"router.sta_on",event,info.ip,info.netmask,info.gw)
     router.sta_info=info
+    router.errors=0
     if (router.state ~= router.LEAF) then
       router.state=router.JOINED
       router.send_info()
@@ -257,10 +264,9 @@ function router.sta_on(event, info)
   end
   if (event == 'disconnected') then
     if (router.state ~= router.LEAF) then
-      router.state=router.INIT
+      router.state = router.INIT
     end
-    router.sta_info=nil
-    router.ap=nil
+    router.init()
   end
 end
 
@@ -285,12 +291,13 @@ function router.scan_results(err,arr)
   else
     local best_pref=0
     local best
+    local l=router.prefix:len()
     mprint(1,string.format("%-26s","SSID"),"Channel BSSID              RSSI Auth Bandwidth Pref")
     for i,ap in ipairs(arr) do
       pref,fac=router.preference(ap)
       mprint(1,string.format("%-32s",ap.ssid),ap.channel,ap.bssid,ap.rssi,ap.auth,ap.bandwidth,pref,fac)
       pref=pref*fac
-      if (pref > best_pref and ap.ssid:sub(1,router.prefix:len()) == router.prefix) then
+      if (pref > best_pref and ap.ssid:sub(1,l) == router.prefix) and ap.ssid:sub(l+1,l+1) ~= '-' then
          best=ap
 	 best_pref=pref
       end
@@ -321,33 +328,45 @@ end
 
 function router.timer_expired()
   local interval=5000
-  mprint(1,"timer expired",router.state,router.ssid,router.ap_ip,router.sta_ip)
+  local sta_ip
+  if (router.sta_info) then
+    sta_ip=router.sta_info.ip
+  end
+  mprint(1,"timer expired",router.state,router.errors,router.ssid,router.ap_ip,sta_ip)
   if (router.state == router.INIT) then
     router.scan()
   end
-  if (router.state == router.CONFIGURED) then
-    router.send_info()
-    router.scan()
-    interval=60000
-  end
-  if (router.state == router.JOINED) then
+  if (router.state == router.JOINED or router.state == router.CONFIGURED) then
     router.errors=router.errors+1
     if (router.errors > 3) then
+      mprint(1,router.errors,' errors during state',router.state,'going back to router.INIT')
       router.state = router.INIT
+      router.init()
     else
       router.send_info()
     end
   end
+  if (router.state == router.CONFIGURED) then
+    router.scan()
+    interval=60000
+  end
   router.timer:alarm(interval, tmr.ALARM_SINGLE, router.timer_expired)
 end
 
-function router.start()
+function router.init()
+  router.sta_info=nil
+  router.ap=nil
   if (router.state == router.INIT) then
     wifi.stop()
     wifi.mode(wifi.STATIONAP)
     wifi.ap.on("sta_connected",router.ap_on)
     wifi.ap.on("sta_disconnected",router.ap_on)
+    wifi.ap.config{ssid=router.prefix..'-Unconnected',channel=9,pwd=router.password}
+    wifi.ap.setip{ip='192.168.4.1',netmask='255.255.255.0',gateway='192.168.4.1',dns='192.168.4.1'}
     wifi.setps(wifi.PS_NONE)
+    router.topology=nil
+    router.ssid=nil
+    router.gen=nil
   end
   if (router.state == router.LEAF) then
     wifi.stop()
@@ -361,6 +380,10 @@ function router.start()
     wifi.start()
     router.scan()
   end
+end
+
+function router.start()
+  router.init()
   if (router.state ~= router.LEAF) then
     router.socket=net.createUDPSocket()
     router.socket:listen(9999)

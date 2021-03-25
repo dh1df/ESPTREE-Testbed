@@ -8,7 +8,7 @@ sockets={}
 sjson={encode=luci.jsonc.stringify,decode=luci.jsonc.parse}
 
 function net.route.add(route)
-    local cmd='-net '..route.dest..'/'..route.mask..' gw '..route.nexthop
+    local cmd='-net '..route.dest..'/'..route.prefixlen..' gw '..route.nexthop
     local add='route add '..cmd
     print(add)
     os.execute(add)
